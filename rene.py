@@ -4,11 +4,12 @@ import numpy as np
 import os
 from sys import platform
 # if platform == "darwin":
-#     from matplotlib import use
-#     use('WXAgg')
+from matplotlib import use
+use('TkAgg')
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
+from scipy import optimize
 
 
 def run_kmeans(data_train, n_cluster=2, min_cluster_dist=36.):
@@ -41,68 +42,175 @@ def run_kmeans(data_train, n_cluster=2, min_cluster_dist=36.):
     return [levels, centroids]
 
 
-def run_gmm(data_train, n_cluster=2, min_occupancy=0.1, min_distance=0.1):
-    if data_train:
-        np_train = np.asarray(data_train)
-        x = np_train.reshape(-1, 1)
+def fn_gauss_multi(x, *p):  # a, xc, w = p
+    _n_peaks = int(len(p) / 3)
+    y = 0.0
+    for pid in range(_n_peaks):
+        y += np.exp(-(x - p[pid * 3 + 1]) ** 2 / p[pid * 3 + 2] ** 2 / 2) * p[pid * 3] / p[pid * 3 + 2] / np.sqrt(2 * np.pi)
+    return y
 
-        models = GaussianMixture(n_cluster).fit(x)
-        centroids = np.squeeze(models.means_)
-        widths = np.squeeze(models.covariances_)
-        weights = models.weights_
 
-        # sort by centroids (increase)
-        dtype = [('centroids', float), ('widths', float), ('weights', float), ('weights_r', float)]
-        gmm_data = []
-        for i in range(n_cluster):
-            gmm_data.append((centroids[i], widths[i], weights[i], weights[i]))
-        gmm_data = np.array(gmm_data, dtype=dtype)
-        gmm_data = np.sort(gmm_data, order='centroids')
+class Barcode:
+    def __init__(self, datatype='peak'):
+        self.datatype = datatype
+        self.pos = []
+        self.weight = []
+        self.weight_fraction = []
+        self.std = []
+        self.sem = []
+        self.fc = []
+        self.gmm_set = {
+            "n_cluster": 5,
+            "min_occupancy": 0.1,
+            "min_distance": 0.02}
+        self.gmm_tot_data_points = []
+        self.gmm_data = []
 
-        # recalculate weights without d-only peak (weight_r)
-        weights_r = []
-        for i in range(n_cluster):
-            if i != 0:
-                weights_r.append(gmm_data[i][3])
-        weights_r = [elmt / (sum(weights_r)) for elmt in weights_r]
-        weights_r.insert(0, 1)
-        for i in range(n_cluster):
-            gmm_data[i][3] = weights_r[i]
+    def run_gmm(self, data_train, n_cluster=2, min_occupancy=0.1, min_distance=0.1):
+        if data_train:
+            np_train = np.asarray(data_train)
+            x = np_train.reshape(-1, 1)
 
-        # remove peaks of small population
-        gmm_data = [elmt for elmt in gmm_data if elmt[2] > min_occupancy]
+            models = GaussianMixture(n_cluster).fit(x)
+            centroids = np.squeeze(models.means_)
+            widths = np.squeeze(models.covariances_)
+            weights = models.weights_
 
-        # remove peaks too close each other
-        gmm_data2 = [gmm_data[0]]
-        for i in range(1, gmm_data.__len__()):
-            if (gmm_data2[-1][0] - gmm_data[i][0]) ** 2 < min_distance ** 2:
-                # update previous peak by averaging with this peak
-                tmpnormf = gmm_data2[-1][2] + gmm_data[i][0]
-                gmm_data2[-1][0] = (gmm_data2[-1][0] * gmm_data2[-1][2] / tmpnormf + gmm_data[i][0] * gmm_data[i][
-                    0] / tmpnormf)  # weighted mean of the FRET values
-                gmm_data2[-1][1] = gmm_data2[-1][1] + gmm_data[i][1]  # covariances are addable
-                gmm_data2[-1][2] = gmm_data2[-1][2] + gmm_data[i][2]  # weights are addabel
-                gmm_data2[-1][3] = gmm_data2[-1][3] + gmm_data[i][3]
+            # sort by centroids (increase)
+            dtype = [('centroids', float), ('widths', float), ('weights', float), ('weights_r', float)]
+            gmm_data = []
+            for i in range(n_cluster):
+                gmm_data.append((centroids[i], widths[i], weights[i], weights[i]))
+            gmm_data = np.array(gmm_data, dtype=dtype)
+            gmm_data = np.sort(gmm_data, order='centroids')
+
+            # recalculate weights without d-only peak (weight_r)
+            weights_r = []
+            for i in range(n_cluster):
+                if i != 0:
+                    weights_r.append(gmm_data[i][3])
+            weights_r = [elmt / (sum(weights_r)) for elmt in weights_r]
+            weights_r.insert(0, 1)
+            for i in range(n_cluster):
+                gmm_data[i][3] = weights_r[i]
+
+            # remove peaks of small population
+            gmm_data = [elmt for elmt in gmm_data if elmt[2] > min_occupancy]
+
+            # remove peaks too close each other
+            gmm_data2 = [gmm_data[0]]
+            for i in range(1, gmm_data.__len__()):
+                if (gmm_data2[-1][0] - gmm_data[i][0]) ** 2 < min_distance ** 2:
+                    # update previous peak by averaging with this peak
+                    tmpnormf = gmm_data2[-1][2] + gmm_data[i][0]
+                    gmm_data2[-1][0] = (gmm_data2[-1][0] * gmm_data2[-1][2] / tmpnormf + gmm_data[i][0] * gmm_data[i][
+                        0] / tmpnormf)  # weighted mean of the FRET values
+                    gmm_data2[-1][1] = gmm_data2[-1][1] + gmm_data[i][1]  # covariances are addable
+                    gmm_data2[-1][2] = gmm_data2[-1][2] + gmm_data[i][2]  # weights are addabel
+                    gmm_data2[-1][3] = gmm_data2[-1][3] + gmm_data[i][3]
+                else:
+                    gmm_data2.append(gmm_data[i])
+        else:
+            gmm_data2 = []
+
+        return gmm_data2
+
+    def build_gmm_fc(self, fc_x, density_factor):
+        gmm_fc = [fc_x]
+        coef = []
+        for elmt in self.gmm_data:
+            coef.append(elmt[2] * (gmm_fc[0][1]-gmm_fc[0][0]) * self.gmm_tot_data_points * density_factor)
+            coef.append(elmt[0])
+            coef.append(np.sqrt(elmt[1]))
+        coef = np.array(coef)
+        gmm_fc.append(fn_gauss_multi(gmm_fc[0], *coef))
+        return gmm_fc
+
+    def find_barcode_by_curve_fit(self, hist_bin, hist_count, raw_data=(), init_pts=()): # either (only either) start_pts or raw_data should be given
+        if not init_pts:
+            if len(raw_data) <= 1:
+                self.gmm_data = []
+                self.gmm_tot_data_points = len(raw_data)
+                init_pts = raw_data
             else:
-                gmm_data2.append(gmm_data[i])
-    else:
-        gmm_data2 = []
+                if 1 < len(raw_data) < self.gmm_set['n_cluster']:
+                    n_clusters = len(raw_data)
+                if len(raw_data) >= self.gmm_set['n_cluster']:
+                    n_clusters = self.gmm_set['n_cluster']
 
-    return gmm_data2
-#
-# class dwell:
-#     def __init__(self):
-#         self.dwell_time = []
+                self.gmm_data = self.run_gmm(data_train=raw_data, n_cluster=n_clusters,
+                             min_occupancy=self.gmm_set['min_occupancy'], min_distance=self.gmm_set['min_distance'])
+                init_pts = [elmt[0] for elmt in self.gmm_data]
+                self.gmm_tot_data_points = len(raw_data)
+        else:
+            self.gmm_data = []
+            self.gmm_tot_data_points = 0
+
+        n_peaks = len(init_pts)
+        if n_peaks != 0:
+            para_init = []
+            para_bounds = []
+            for pki in range(n_peaks):
+                para_init += [max(hist_count) * (hist_bin[1] - hist_bin[0]), init_pts[pki], 0.02]
+                para_bounds += [np.Inf, 1.1, 0.05]
+            para_bounds = ([0.0, 0.0, 0.0] * n_peaks, para_bounds)
+            fit_success = True
+            try:
+                coeff, var_matrix = optimize.curve_fit(fn_gauss_multi, hist_bin, hist_count, p0=para_init, bounds=para_bounds, maxfev=500)
+            except:
+                fit_success = False
+
+            density_factor = 10
+            self.fc = [np.arange(hist_bin[0], hist_bin[-1], (hist_bin[1] - hist_bin[0]) / density_factor)]
+
+            if fit_success:
+                self.fc.append(fn_gauss_multi(self.fc[0], *coeff))
+                self.pos = []
+                self.weight = []
+                self.std = []
+                for pki in range(n_peaks):
+                    self.weight.append(coeff[pki * 3 + 0] / (hist_bin[1] - hist_bin[0]))
+                    self.pos.append(coeff[pki * 3 + 1])
+                    self.std.append(coeff[pki * 3 + 2])
+                norm_factor = np.sum(self.weight)
+                self.weight_fraction = [elmt / norm_factor for elmt in self.weight]
+                self.sem = [w/np.sqrt(n) for w, n in zip(self.std, self.weight)]
+            else:
+                self.fc = self.build_gmm_fc(fc_x=self.fc[0], density_factor=density_factor)
+                self.pos = []
+                self.weight = []
+                self.weight_fraction = []
+                self.std = []
+                self.sem = []
+                for tmp_gmm_data in self.gmm_data:
+                    self.weight.append(tmp_gmm_data[2] * self.gmm_tot_data_points)
+                    self.weight_fraction.append(tmp_gmm_data[2])
+                    self.pos.append(tmp_gmm_data[0])
+                    self.std.append(np.sqrt(tmp_gmm_data[1]))
+                    self.sem.append(np.sqrt(tmp_gmm_data[1])/np.sqrt(tmp_gmm_data[2] * self.gmm_tot_data_points))
+        # else:
+        #     self.fc = []
+        #     self.pos = []
+        #     self.weight = []
+        #     self.weight_fraction = []
+        #     self.std = []
+        #     self.sem = []
+
+        # plt.figure(1113)
+        # plt.clf()
+        # plt.plot(hist_bin, hist_count, 'k')
+        # plt.plot(self.fc[0], self.fc[1], 'r')
+        # plt.title(fit_success)
+        # plt.show(block=False)
+        # plt.pause(0.1)
+
 
 class Rene:
-    def __init__(self, trace_path, uip=None, pg_bar=None, log_txt=None):
-        # plt.close('all')
-        # plt.show()
-        # plt.pause(0.01)
-
+    def __init__(self, trace_path, uip=None, pg_bar=None, log_txt=None, gui_obj=None):
         self.log_txt = log_txt
         self.pg_bar = pg_bar
         self.tr_path = trace_path
+        self.gui_obj = gui_obj
 
         # user-defined parameters
         if uip is None:
@@ -126,6 +234,7 @@ class Rene:
             }
 
         # print(f'Working on {os.path.basename(self.tr_path[0])}...')
+
         self.set_parameters(uip, run_afterwards=False)
 
         # dependent parameters
@@ -152,10 +261,6 @@ class Rene:
         self.hist_idv = []
         self.hist_kymo = []
         self.hist_kymo_idv = []
-        self.barcode_pos_datapt = []
-        self.barcode_pos_datapt_idv = []
-        self.barcode_pos_peak = []
-        self.barcode_pos_peak_idv = []
 
         self.E_per_peak = []
         self.E_in_peak = []
@@ -174,11 +279,13 @@ class Rene:
             sys.stdout.write(logtxt)
 
     def set_parameters(self, uip=None, run_afterwards=False):
-        self.time_res = uip["time_res"]
+        self.uip = uip
+
+        # self.uip['time_res'] = uip["time_res"]
         self.gamma = uip["gamma"]
         self.leakage = uip["leakage"]
-        self.bg_d_fix = uip["bg_d_fix"]
-        self.bg_a_fix = uip["bg_a_fix"]
+        # self.bg_d_fix = uip["bg_d_fix"]
+        # self.bg_a_fix = uip["bg_a_fix"]
         self.Int_max = uip["Int_max"]
         self.Int_min = uip["Int_min"]
         self.toi_start = uip["toi_start"]
@@ -186,21 +293,16 @@ class Rene:
 
         self.keyword = uip["keyword"]
         self.min_peak_len = uip["min_peak_len"]
-        self.min_peak_int = uip["min_peak_int"]
-        self.max_peak_int = uip["max_peak_int"]
+        # self.uip['min_peak_int'] = uip["min_peak_int"]
+        # self.uip['max_peak_int'] = uip["max_peak_int"]
         self.E_tolerance = uip["E_tolerance"]
 
         self.t_bin_size = uip["t_bin_size"]
         self.e_bin_size = uip["e_bin_size"]
 
         self.cmap = uip["cmap"]
-
-        self.bcd_max_n_peaks = uip["bcd_max_n_peaks"]
-        self.bcd_min_occupancy = uip["bcd_min_occupancy"]
-        self.bcd_min_distance = uip["bcd_min_distance"]
-
-        if run_afterwards:
-            self.run_analysis()
+        # if run_afterwards:
+        #     self.run_analysis()
 
     def run_analysis(self):
         t0 = time.time()
@@ -212,19 +314,19 @@ class Rene:
         self.set_progressbar(5)
         self.update_log(f"\r   peak finding...")
         self.find_peak()
-        self.set_progressbar(25)
+        self.set_progressbar(20)
         self.update_log(f"\r   adjusting backgrounds...")
         self.auto_bg_set()
-        self.set_progressbar(45)
+        self.set_progressbar(25)
         self.update_log(f"\r   calculating FRET...")
         self.calc_fret()
-        self.set_progressbar(50)
+        self.set_progressbar(30)
         self.update_log(f"\r   building most likely intensity traces...")
         self.build_it_ideal()
-        self.set_progressbar(60)
+        self.set_progressbar(40)
         self.update_log(f"\r   collecting dwell time info...")
         self.analyze_peaks()
-        self.set_progressbar(80)
+        self.set_progressbar(50)
         self.update_log(f"\r   building histograms...")
         self.build_hist_kymo()
         self.update_log(f"\r   make barcodes...")
@@ -292,34 +394,42 @@ class Rene:
             # self.update_log(f"\r   peak finding... ({mid / self.N_trace * 10000 // 10 / 10}%)")
             if mid % 7 == 0:
                 self.update_log(f"\r   peak finding... (tr{mid}/{self.N_trace})")
-            self.set_progressbar(5 + (mid * 10 // self.N_trace) * 1.5)
+            self.set_progressbar(5 + (mid * 15 // self.N_trace))
             self.It_level[mid][:], self.It_ideal_centroids[mid][:] = \
                 run_kmeans(data_train=self.Id_org[mid] + self.Ia_org[mid])
 
     def auto_bg_set(self):
-        for mid in range(self.N_trace):
-            if mid % 7 == 0:
-                self.update_log(f"\r   adjusting backgrounds... (tr{mid}/{self.N_trace})")
-                self.set_progressbar(25 + (mid * 10 // self.N_trace) * 2)
+        if self.uip["bg_d_fix"] != 0 and self.uip["bg_a_fix"] != 0:
+            self.bg_d = [self.uip["bg_d_fix"]] * self.N_trace
+            self.bg_a = [self.uip["bg_a_fix"]] * self.N_trace
+            print(self.uip["bg_d_fix"])
+            print(self.uip["bg_a_fix"])
+        else:
+            self.bg_d = []
+            self.bg_a = []
+            for mid in range(self.N_trace):
+                if mid % 7 == 0:
+                    self.update_log(f"\r   adjusting backgrounds... (tr{mid}/{self.N_trace})")
+                    self.set_progressbar(20 + (mid * 10 // self.N_trace) * 2)
 
-            aa = [self.Ia_org[mid][i] for i, elmt in enumerate(self.It_level[mid][:]) if elmt == 0]
-            dd = [self.Id_org[mid][i] for i, elmt in enumerate(self.It_level[mid][:]) if elmt == 0]
+                aa = [self.Ia_org[mid][i] for i, elmt in enumerate(self.It_level[mid][:]) if elmt == 0]
+                dd = [self.Id_org[mid][i] for i, elmt in enumerate(self.It_level[mid][:]) if elmt == 0]
 
-            aa_threshold = np.average(aa) + np.std(aa) * 2
-            aa = [elmt for elmt in aa if elmt < aa_threshold]
+                aa_threshold = np.average(aa) + np.std(aa) * 2
+                aa = [elmt for elmt in aa if elmt < aa_threshold]
 
-            dd_threshold = np.average(dd) + np.std(dd) * 2
-            dd = [elmt for elmt in dd if elmt < dd_threshold]
+                dd_threshold = np.average(dd) + np.std(dd) * 2
+                dd = [elmt for elmt in dd if elmt < dd_threshold]
 
-            bg_method = 'average'
-            if bg_method == 'average':
-                self.bg_d.append(np.average(dd))
-                self.bg_a.append(np.average(aa))
-            elif bg_method == 'bottome gaussian':
-                dummy, d_centroids = run_kmeans(data_train=dd, n_cluster=2, min_cluster_dist=1)
-                dummy, a_centroids = run_kmeans(data_train=aa, n_cluster=2, min_cluster_dist=1)
-                self.bg_d.append(min(d_centroids))
-                self.bg_a.append(min(a_centroids))
+                bg_method = 'average'
+                if bg_method == 'average':
+                    self.bg_d.append(np.average(dd))
+                    self.bg_a.append(np.average(aa))
+                elif bg_method == 'bottom gaussian':
+                    dummy, d_centroids = run_kmeans(data_train=dd, n_cluster=2, min_cluster_dist=1)
+                    dummy, a_centroids = run_kmeans(data_train=aa, n_cluster=2, min_cluster_dist=1)
+                    self.bg_d.append(min(d_centroids))
+                    self.bg_a.append(min(a_centroids))
 
     def calc_fret(self):
         self.Id = np.zeros_like(self.Id_org)
@@ -350,7 +460,7 @@ class Rene:
         for mid in range(self.N_trace):
             if mid % 7 == 0:
                 self.update_log(f"\r   building most likely intensity traces... (tr{mid}/{self.N_trace})")
-                self.set_progressbar(50 + (mid * 10 // self.N_trace))
+                self.set_progressbar(35 + (mid * 5 // self.N_trace))
             aa = [self.Ia[mid][i] for i, elmt in enumerate(self.It_level[mid][:]) if elmt == 1]
             dd = [self.Id[mid][i] for i, elmt in enumerate(self.It_level[mid][:]) if elmt == 1]
             if aa:
@@ -358,11 +468,11 @@ class Rene:
                 self.It_ideal[mid][:] = np.multiply(self.It_level[mid][:], icenter)
 
     def analyze_peaks(self):
-        # --- get transition potins
+        # --- get transition points
         for mid in range(self.N_trace):
             if mid % 8 == 0:
                 self.update_log(f"\r   analyze peaks... (tr{mid}/{self.N_trace})")
-                self.set_progressbar(60 + (mid * 10 // self.N_trace))
+                self.set_progressbar(40 + (mid * 10 // self.N_trace))
             tmp_trans = np.diff(self.It_level[mid])
             e_diff = np.abs(np.diff(self.E[mid]))
             e_diff = e_diff * self.It_level[mid][1:] * self.It_level[mid][:-1]
@@ -390,7 +500,7 @@ class Rene:
             self.trans_d2u.append(tmp_d2u)
             self.trans_u2d.append(tmp_u2d)
 
-        # --- find N binding events
+        # --- count number of binding events
         n_binding_events = np.zeros((self.N_trace,))
         for mid in range(self.N_trace):
             n_binding_events[mid] = self.trans_d2u[mid][:].__len__()
@@ -454,33 +564,64 @@ class Rene:
                         max_val = user_response[0][1]
             return [min_val, max_val]
 
-        tmp = get_thresh(self.max_peak_int, self.min_peak_int, minormax='min')
-        self.min_peak_int = int(tmp[0])
-        tmp = get_thresh(self.max_peak_int, self.min_peak_int, minormax='max')
-        self.max_peak_int = int(tmp[1])
+        tmp = get_thresh(self.uip['max_peak_int'], self.uip['min_peak_int'], minormax='min')
+        self.uip['min_peak_int'] = int(tmp[0])
+        tmp = get_thresh(self.uip['max_peak_int'], self.uip['min_peak_int'], minormax='max')
+        self.uip['max_peak_int'] = int(tmp[1])
 
-        # --- cutoff E_per_peak
+        if self.gui_obj:
+            self.gui_obj.user_parameters(mode='set', uip=self.uip)
+
+        plt.show(block=False)
+        plt.close(fhd_thresh)
+        plt.pause(0.1)
+
+        # --- find good binding events
+        # 1. select those with proper intensity
+        vid1 = []
+        for mid in range(self.N_trace):
+            tmp_vid = [False] * len(self.I_per_peak[mid])
+            for pki, tmp_int in enumerate(self.I_per_peak[mid]):
+                if self.uip['min_peak_int'] < tmp_int < self.uip['max_peak_int']:
+                    tmp_vid[pki] = True
+            vid1.append(tmp_vid)
+
+        # 2. select sufficiently longer binding events
+        vid2 = []
+        for mid in range(self.N_trace):
+            tmp_vid = [False] * len(self.I_per_peak[mid])
+            for pki, tmp_int in enumerate(self.I_in_peak[mid]):
+                if self.min_peak_len <= len(tmp_int) * self.uip['time_res']:
+                    tmp_vid[pki] = True
+            vid2.append(tmp_vid)
+
+        # combine all the selections
+        vid_all = []
+        for vid1_per_mol, vid2_per_mol in zip(vid1, vid2):
+            vid_all.append([a and b for a, b in zip(vid1_per_mol, vid2_per_mol)])
+
+        # --- select good binding events
         self.I_per_peak_sel = []
         self.E_per_peak_sel = []
         self.I_in_peak_sel = []
         self.E_in_peak_sel = []
         self.trans_d2u_sel = []
         self.trans_u2d_sel = []
-        for mid in range(self.N_trace):
+        for mid, vid_of_a_mol in enumerate(vid_all):
             tmp_i_per_peak = []
             tmp_e_per_peak = []
             tmp_i_in_peak = []
             tmp_e_in_peak = []
             tmp_d2u = []
             tmp_u2d = []
-            for vid, tmp_int in enumerate(self.I_per_peak[mid]):
-                if self.min_peak_int < tmp_int < self.max_peak_int:
-                    tmp_i_per_peak.append(tmp_int)
-                    tmp_e_per_peak.append(self.E_per_peak[mid][vid])
-                    tmp_i_in_peak.append(self.I_in_peak[mid][vid])
-                    tmp_e_in_peak.append(self.E_in_peak[mid][vid])
-                    tmp_d2u.append(self.trans_d2u[mid][vid])
-                    tmp_u2d.append(self.trans_u2d[mid][vid])
+            for pki, vid_of_a_peak in enumerate(vid_of_a_mol):
+                if vid_of_a_peak:
+                    tmp_i_per_peak.append(self.I_per_peak[mid][pki])
+                    tmp_e_per_peak.append(self.E_per_peak[mid][pki])
+                    tmp_i_in_peak.append(self.I_in_peak[mid][pki])
+                    tmp_e_in_peak.append(self.E_in_peak[mid][pki])
+                    tmp_d2u.append(self.trans_d2u[mid][pki])
+                    tmp_u2d.append(self.trans_u2d[mid][pki])
             self.I_per_peak_sel.append(tmp_i_per_peak)
             self.E_per_peak_sel.append(tmp_e_per_peak)
             self.I_in_peak_sel.append(tmp_i_in_peak)
@@ -488,20 +629,11 @@ class Rene:
             self.trans_d2u_sel.append(tmp_d2u)
             self.trans_u2d_sel.append(tmp_u2d)
 
-        plt.show(block=False)
-        # plt.close(fhd_thresh)
-        plt.pause(0.1)
-
         # --- get dwell time distribution
         self.get_dwell_info()
 
     def get_dwell_info(self):
-        # --- get up dwell times (method 1)
-        # self.dwell_times_up = []
-        # for tmp_I_in_peaks_in_a_mol in self.I_in_peak_sel:
-        #     self.dwell_times_up.append([len(elmt) * self.time_res for elmt in tmp_I_in_peaks_in_a_mol])
-
-        # --- get down dwell times (method 2)
+        # --- get up dwell times
         self.dwell_times_down = []
         self.dwell_times_up = []
         lid = -1
@@ -514,17 +646,17 @@ class Rene:
                 else:
                     tmp_d2u_c = tmp_d2u[1:]
                     tmp_u2d_c = tmp_u2d[:-1]
-                self.dwell_times_down.append([(elmt_d2u - elmt_u2d) * self.time_res for elmt_d2u, elmt_u2d in zip(tmp_d2u_c, tmp_u2d_c)])
-                self.dwell_times_up.append([(elmt_u2d - elmt_d2u) * self.time_res for elmt_d2u, elmt_u2d in zip(tmp_d2u, tmp_u2d)])
+                self.dwell_times_down.append([(elmt_d2u - elmt_u2d) * self.uip['time_res'] for elmt_d2u, elmt_u2d in zip(tmp_d2u_c, tmp_u2d_c)])
+                self.dwell_times_up.append([(elmt_u2d - elmt_d2u) * self.uip['time_res'] for elmt_d2u, elmt_u2d in zip(tmp_d2u, tmp_u2d)])
             else:
                 self.dwell_times_down.append([])
                 self.dwell_times_up.append([])
 
     def build_hist_kymo(self):
-        t_bin = np.arange(0, self.trace_len, self.t_bin_size)
-
         self.update_log(f"\r   building hist-kymos...")
-        self.set_progressbar(80)
+        self.set_progressbar(50)
+
+        t_bin = np.arange(0, self.trace_len, self.t_bin_size)
         self.hist_kymo_idv = np.zeros((self.N_trace, len(t_bin) - 1, len(self.e_bin) - 1))
         for i, t_tag in enumerate(t_bin[:-1]):
             for mid in range(self.N_trace):
@@ -540,7 +672,7 @@ class Rene:
 
         # build hist-kymo from the peak averages
         self.update_log(f"\r   building hist-kymos...")
-        self.set_progressbar(85)
+        self.set_progressbar(55)
         self.peak_hist_kymo_idv = np.zeros_like(self.hist_kymo_idv)
         for i, t_tag in enumerate(t_bin[:-1]):
             for mid in range(self.N_trace):
@@ -554,83 +686,74 @@ class Rene:
         self.peak_hist = sum(self.peak_hist_kymo)
 
     def determine_barcodes(self):
+        # if mid is not defined, all the molecules will be analyzed
         # --- get peak centers from all data points (Guassian Mixture modeling)
-        self.update_log(f"\r   detecting barcode positions from all data points...")
-        self.set_progressbar(90)
-        tmp_input = self.E_clean.reshape(self.N_trace * self.trace_len)
-        tmp_input = [tmp for tmp in tmp_input if not np.isinf(tmp)]
-        gmm_data = run_gmm(data_train=tmp_input, n_cluster=5, min_occupancy=0.1, min_distance=0.02)
-        self.barcode_pos_datapt = [elmt[0] for elmt in gmm_data]
-        self.barcode_width_datapt = [elmt[1] for elmt in gmm_data]
-        self.barcode_weight_datapt = [elmt[2] for elmt in gmm_data]
+        self.update_log(f"\r   detecting barcode positions...")
+        self.set_progressbar(60)
+
+        # find barcode from all molecules
+        self.bcd_datapt_all = self.find_barcode_idv(mid=-1, datatype='datapt', init_pts=())
+        self.bcd_peak_all = self.find_barcode_idv(mid=-1, datatype='peak', init_pts=())
 
         # run over each molecule
-        self.barcode_pos_datapt_idv = [[]] * self.N_trace
-        self.barcode_width_datapt_idv = [[]] * self.N_trace
-        self.barcode_weight_datapt_idv = [[]] * self.N_trace
+        self.bcd_datapt_idv = []
+        self.bcd_peak_idv = []
         for mid in range(self.N_trace):
-            if mid % 13 == 0:
-                self.update_log(f"\r   detecting barcode positions from all data points ({mid}/{self.N_trace})...")
-            tmp_input = self.E_clean[mid]
-            tmp_input = [tmp for tmp in tmp_input if not np.isinf(tmp)]
-            if len(tmp_input) > 10:  # For individual molecules, at least X data points required
-                gmm_data = run_gmm(data_train=tmp_input, n_cluster=3, min_occupancy=0.1, min_distance=0.02)
-                self.barcode_pos_datapt_idv[mid] = [elmt[0] for elmt in gmm_data]
-                self.barcode_width_datapt_idv[mid] = [elmt[1] for elmt in gmm_data]
-                self.barcode_weight_datapt_idv[mid] = [elmt[2] for elmt in gmm_data]
+            # if mid % 1 == 0:
+            self.update_log(f"\r   detecting barcode positions ({mid}/{self.N_trace})...")
+            self.set_progressbar(60+mid/self.N_trace*30)
 
-        # --- get peak centers from peaks (Guassian Mixture modeling)
-        self.update_log(f"\r   detecting barcode positions from peaks...")
-        self.set_progressbar(95)
+            self.bcd_datapt_idv.append(self.find_barcode_idv(mid=mid, datatype='datapt', init_pts=()))
+            self.bcd_peak_idv.append(self.find_barcode_idv(mid=mid, datatype='peak', init_pts=()))
+
+    def find_barcode_idv(self, mid, datatype='peak', init_pts=()):
+        tmp_bcd = Barcode(datatype='datapt')
+
         tmp_input = []
-        for mid in range(self.N_trace):
-            for pki in range(self.E_per_peak_sel[mid].__len__()):
-                tmp_input.append(self.E_per_peak_sel[mid][pki])
-        tmp_input = [tmp for tmp in tmp_input if not np.isinf(tmp) and not np.isnan(tmp)]
-        gmm_data = run_gmm(data_train=tmp_input, n_cluster=self.bcd_max_n_peaks, min_occupancy=self.bcd_min_occupancy, min_distance=self.bcd_min_distance)
-        self.barcode_pos_peak = [elmt[0] for elmt in gmm_data]
-        self.barcode_width_peak = [elmt[1] for elmt in gmm_data]
-        self.barcode_weight_peak = [elmt[2] for elmt in gmm_data]
+        if mid == -1 and datatype == 'datapt':
+            hist_data = self.hist
+            for tmp_E_in_mol in self.E_in_peak_sel:
+                for tmp_E_in_peak in tmp_E_in_mol:
+                    for tmp_Es in tmp_E_in_peak:
+                        tmp_input.append(tmp_Es)
+        elif mid == -1 and datatype == 'peak':
+            hist_data = self.peak_hist
+            for tmp_E_peaks in self.E_per_peak_sel:
+                for elmt in tmp_E_peaks:
+                    tmp_input.append(elmt)
+        elif mid is not -1 and datatype == 'datapt':
+            hist_data = self.hist_idv[mid]
+            for tmp_E_in_peak in self.E_in_peak_sel[mid]:
+                for tmp_Es in tmp_E_in_peak:
+                    tmp_input.append(tmp_Es)
+        elif mid is not -1 and datatype == 'peak':
+            hist_data = self.peak_hist_idv[mid]
+            for elmt in self.E_per_peak_sel[mid]:
+                tmp_input.append(elmt)
 
-        # run over each molecule
-        self.barcode_pos_peak_idv = [[]] * self.N_trace
-        self.barcode_width_peak_idv = [[]] * self.N_trace
-        self.barcode_weight_peak_idv = [[]] * self.N_trace
-        for mid in range(self.N_trace):
-            if mid % 10 == 0:
-                self.update_log(f"\r   detecting barcode positions from peaks ({mid}/{self.N_trace})...")
-            tmp_input = [tmp for tmp in self.E_per_peak_sel[mid] if not np.isinf(tmp) and not np.isnan(tmp)]
-            if len(tmp_input) > 2:
-                gmm_data = run_gmm(data_train=tmp_input, n_cluster=self.bcd_max_n_peaks, min_occupancy=self.bcd_min_occupancy, min_distance=self.bcd_min_distance)
-                self.barcode_pos_peak_idv[mid] = [elmt[0] for elmt in gmm_data]
-                self.barcode_width_peak_idv[mid] = [elmt[1] for elmt in gmm_data]
-                self.barcode_weight_peak_idv[mid] = [elmt[2] for elmt in gmm_data]
-            elif len(tmp_input) == 2:
-                if (tmp_input[1]-tmp_input[0])**2 < self.bcd_min_distance**2:
-                    self.barcode_pos_peak_idv[mid] = [np.mean(tmp_input)]
-                    self.barcode_width_peak_idv[mid] = [np.std(tmp_input) / np.sqrt(2)]
-                    self.barcode_weight_peak_idv[mid] = [1]
-                else:
-                    self.barcode_pos_peak_idv[mid] = tmp_input
-                    self.barcode_width_peak_idv[mid] = [np.std(self.E_in_peak_sel[mid][0])/np.sqrt(len(self.E_in_peak_sel[mid][0])),
-                                                        np.std(self.E_in_peak_sel[mid][1])/np.sqrt(len(self.E_in_peak_sel[mid][1]))]
-                    self.barcode_weight_peak_idv[mid] = [0.5, 0.5]
-            elif len(tmp_input) == 1:
-                self.barcode_pos_peak_idv[mid] = [tmp_input[0]]
-                self.barcode_width_peak_idv[mid] = [np.std(self.E_in_peak_sel[mid][0])/np.sqrt(len(self.E_in_peak_sel[mid][0]))]
-                self.barcode_weight_peak_idv[mid] = [1]
+        tmp_hist_bin = np.add(self.e_bin[0:-1], (self.e_bin[2] - self.e_bin[1]) / 2)
 
-    # def check_barcode(self, ref_pos, barcodes, uncertainty):
-        # # --- check if individual molecules has specific barcode
-        # N_barcodes = len(self.barcode_pos_peak)
-        # good_barcodes = [0, 1]
-        # bar_uncertainty = 0.02
-        #
-        # self.barcodes_detected_ind = []
-        # for mid, tmp_mol_bar in enumerate(self.barcode_pos_peak_idv):
-        #     tmp_detected = []
-        #     for tmp_pos in tmp_mol_bar:
-        #         for bid in good_barcodes:
-        #             if self.barcode_pos_peak[bid] - bar_uncertainty < tmp_pos < self.barcode_pos_peak[bid] + bar_uncertainty:
-        #                 tmp_detected.append(bid)
-        #     self.barcodes_detected_ind.append(tmp_detected)
+        # if 1 < len(tmp_input) < self.uip["bcd_max_n_peaks"]:
+        #     n_clusters = len(tmp_input)
+        # if len(tmp_input) >= self.uip["bcd_max_n_peaks"]:
+        #     n_clusters = self.uip["bcd_max_n_peaks"]
+
+        # if 1 < len(tmp_input):
+        tmp_bcd.gmm_set = {"n_cluster": self.uip["bcd_max_n_peaks"],
+                           "min_occupancy": self.uip["bcd_min_occupancy"],
+                           "min_distance": self.uip["bcd_min_distance"]}
+        tmp_bcd.find_barcode_by_curve_fit(hist_bin=tmp_hist_bin, hist_count=hist_data, raw_data=tmp_input, init_pts=init_pts)
+
+
+        # update rene data
+        if init_pts:    # if init_pts is not empty, that means this function is manually called for specific mid.
+            if mid == -1 and datatype == 'datapt':
+                self.bcd_datapt_all = tmp_bcd
+            elif mid == -1 and datatype == 'peak':
+                self.bcd_peak_all = tmp_bcd
+            elif mid is not -1 and datatype == 'datapt':
+                self.bcd_datapt_idv[mid] = tmp_bcd
+            elif mid is not -1 and datatype == 'peak':
+                self.bcd_peak_idv[mid] = tmp_bcd
+
+        return tmp_bcd

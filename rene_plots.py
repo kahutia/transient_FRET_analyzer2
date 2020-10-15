@@ -2,13 +2,12 @@ from random import random
 import numpy as np
 import os
 from pathlib import Path
-# import matplotlib
-# matplotlib.use('TkAgg')
+from matplotlib import use
+use('TkAgg')
 import matplotlib.pyplot as plt
 from scipy import optimize
 from rene import Rene
 from matplotlib.widgets import Slider, Button, TextBox
-from sklearn.mixture import GaussianMixture
 
 
 def gen_color_code(nx, ny):
@@ -29,45 +28,76 @@ def gen_color_code(nx, ny):
 
 class RenePlotSimple(Rene):
 
-    def update_barcodes(self, bcd_ax, mid=-1):
+    def update_barcodes(self, bcd_ax, mid=-1, barcodes_n=1):
         bcd_ax.cla()
+        barcode_disp_ver = 2
         if mid == -1:
-            c_bar_pos = self.barcode_pos_peak
+            tmp_bcd = self.bcd_peak_all
+            # c_bar_pos = self.barcode_pos_peak
+            # c_bar_width = self.barcode_width_peak
         else:
-            c_bar_pos = self.barcode_pos_peak_idv[mid]
+            tmp_bcd = self.bcd_peak_idv[mid]
+            # c_bar_pos = self.barcode_pos_peak_idv[mid]
+            # c_bar_width = self.barcode_width_peak_idv[mid]
 
-        if not hasattr(c_bar_pos, "__len__"):
-            c_bar_pos = [c_bar_pos]
-        for c_cen in c_bar_pos:
-            dummy_x = [c_cen, c_cen]
-            bcd_ax.plot(dummy_x, [0, 1], color=(0, 0, 0), lw=3)
-            bcd_ax.set_xlabel('FRET')
-            bcd_ax.set_ylabel('Barcode')
-            bcd_ax.set_ylim(0, 1)
+        if not hasattr(tmp_bcd.pos, "__len__"):
+            tmp_bcd.pos = [tmp_bcd.pos]
+
+        if barcode_disp_ver == 1:  # old version with fixed width
+            for c_cen in tmp_bcd.pos:
+                dummy_x = [c_cen, c_cen]
+                bcd_ax.plot(dummy_x, [0, 1], color=(0, 0, 0), lw=3)
+                bcd_ax.set_xlabel('FRET')
+                bcd_ax.set_ylabel('Barcode')
+                bcd_ax.set_ylim(0, 1)
+                bcd_ax.set_xlim(self.e_bin[0], self.e_bin[-1])
+                bcd_ax.tick_params(axis='x', which='both', bottom=True, top=True, labeltop=False, labelbottom=True)
+                bcd_ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False, labelright=False)
+        else:
+            barcode_img_res = 250
+            barcode_img = np.zeros((barcode_img_res + 1, 1))
+            y_vct, x_vct = np.mgrid[0:1.1:1, 0:1 + 2 / barcode_img_res:1 / barcode_img_res]
+            barcode_single_line = np.ones(1)
+            for c_cen, c_width in zip(tmp_bcd.pos, tmp_bcd.sem):
+                first_line = int((c_cen - c_width) * barcode_img_res)
+                last_line = int((c_cen + c_width) * barcode_img_res)
+                if first_line == last_line:
+                    last_line += 1
+                if first_line < 0:
+                    first_line = 0
+                if last_line > barcode_img_res:
+                    last_line = barcode_img_res
+                for c_line in range(first_line, last_line):
+                    barcode_img[c_line] = barcode_single_line
+            pc_hdl = bcd_ax.pcolor(x_vct, y_vct, barcode_img.transpose(), cmap='binary')
             bcd_ax.set_xlim(self.e_bin[0], self.e_bin[-1])
-            bcd_ax.tick_params(axis='x', which='both', bottom=True, top=True, labeltop=False, labelbottom=True)
-            bcd_ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False, labelright=False)
+
         plt.show(block=False)
         plt.pause(0.001)
 
-    def update_histogram(self, hist_ax, mid=-1):
-        if mid == -1:
-            hist_data = self.peak_hist
+    def update_histogram(self, hist_ax, mid=-1, datatype='peak'):
+        if datatype == 'peak':
+            if mid == -1:
+                hist_data = self.peak_hist
+            else:
+                hist_data = self.peak_hist_idv[mid]
         else:
-            hist_data = self.peak_hist_idv[mid]
+            if mid == -1:
+                hist_data = self.hist
+            else:
+                hist_data = self.hist_idv[mid]
 
         hist_ax.cla()
         e_bin_center = np.add(self.e_bin[0:-1], (self.e_bin[2] - self.e_bin[1]) / 2)
         hist_ax.bar(e_bin_center, hist_data, self.e_bin[1] - self.e_bin[0], color=(0.7, 0.7, 0.7))
         hist_ax.set_xlim(self.e_bin[0], self.e_bin[-1])
-        hist_ax.set_ylabel('# peaks')
+        if datatype == 'peak':
+            hist_ax.set_ylabel('# peaks')
+        else:
+            hist_ax.set_ylabel('# data points')
         hist_ax.tick_params(axis='x', which='both', bottom=True, top=True, labeltop=False, labelbottom=False)
 
-    def show_hist_kymo(self, fignum, rene_id=0, mid=-1, output_file_path=[]):
-        n_line_kimo, n_e_bin = np.shape(self.hist_kymo)
-        t_grid, e_grid = np.mgrid[0:n_line_kimo, self.e_bin[0]:self.e_bin[-1]:(self.e_bin[1] - self.e_bin[0])]
-        t_grid *= self.time_res * self.t_bin_size
-        e_bin_center = np.add(self.e_bin[0:-1], (self.e_bin[2] - self.e_bin[1]) / 2)
+    def show_hist_kymo(self, fignum, rene_id=0, mid=-1, output_file_path=()):
 
         color_code_dark, color_code_bright = gen_color_code(nx=self.N_trace, ny=int(self.trace_len / 3))
 
@@ -77,44 +107,46 @@ class RenePlotSimple(Rene):
         ax_kymos = []
 
         # --- draw hist kymograph as number of peaks
-        gs = fhd_kymograph_peak.add_gridspec(6, 1)
-        ax_kymos.append(fhd_kymograph_peak.add_subplot(gs[0:-2, 0]))
+        gs = fhd_kymograph_peak.add_gridspec(7, 1)
+        ax_kymos.append(fhd_kymograph_peak.add_subplot(gs[0:-3, 0]))
 
-        # draw individual binding evetns
+        # draw individual binding events
         mid_c = -1
         for tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes in zip(self.E_in_peak_sel, self.trans_d2u_sel,
                                                                        color_code_bright):
             mid_c += 1
             if mid == -1 or mid == mid_c:
                 for tmp_etrain, tmp_t_start, c_code in zip(tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes):
-                    tmp_fr_vct = [(tmp_t_start + elmt) * self.time_res for elmt in range(len(tmp_etrain))]
+                    tmp_fr_vct = [(tmp_t_start + elmt) * self.uip['time_res'] for elmt in range(len(tmp_etrain))]
                     plt.plot(tmp_etrain, tmp_fr_vct, color=c_code, linewidth=0.5)
+        # draw peak-averaged values
         mid_c = -1
         for tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes in zip(self.E_per_peak_sel, self.trans_d2u_sel,
                                                                        color_code_dark):
             mid_c += 1
             if mid == -1 or mid == mid_c:
                 for tmp_e_value, tmp_t_start, c_code in zip(tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes):
-                    plt.plot(tmp_e_value, tmp_t_start * self.time_res, '.', color=c_code, markersize=2)
+                    plt.plot(tmp_e_value, tmp_t_start * self.uip['time_res'], '.', color=c_code, markersize=2)
 
         plt.ylabel('Time (s)')
         plt.xlim(self.e_bin[0], self.e_bin[-1])
-        plt.ylim(t_grid[-1][0], 0)
+        plt.ylim(np.max([len(tmp_train) for tmp_train in self.E]) * self.uip['time_res'], 0)
         plt.tick_params(axis='x', which='both', bottom=False, top=True, labeltop=True, labelbottom=False)
-
-        # --- draw FRET histogram
-        ax_kymos.append(fhd_kymograph_peak.add_subplot(gs[-2, 0]))
-        self.update_histogram(ax_kymos[1], mid)
 
         # --- add fit button
         ax_fit = plt.axes([0.93, 0.3, 0.05, 0.075])
         btn_fit = Button(ax_fit, 'Fit')
         btn_fit.on_clicked(
-            lambda event: self.fig_ehist(event, e_bin_center, ax_kymos, method='curv_fit', automode='manual', mid=mid, output_file_path=output_file_path, fhd_kymograph_peak=fhd_kymograph_peak))
+            lambda event: self.fig_ehist(event, ax_kymos, method='curv_fit', automode='manual', mid=mid,
+                                         output_file_path=output_file_path, fhd_kymograph_peak=fhd_kymograph_peak))
 
         # --- Draw fit curve and barcodes
+        # --- draw FRET histogram
+        ax_kymos.append(fhd_kymograph_peak.add_subplot(gs[-3, 0]))
+        ax_kymos.append(fhd_kymograph_peak.add_subplot(gs[-2, 0]))
         ax_kymos.append(fhd_kymograph_peak.add_subplot(gs[-1, 0]))
-        self.fig_ehist('', e_bin_center, ax_kymos, method='curv_fit', automode='auto', mid=mid)
+        self.fig_ehist('', ax_kymos, method='curv_fit', automode='auto', mid=mid)
+
         plt.show(block=False)
         plt.pause(0.001)
 
@@ -130,138 +162,107 @@ class RenePlotSimple(Rene):
             fhd.savefig(output_file_path, format='eps')
 
     def save_barcode_info(self, output_file_path):
-            # --- save barcode positions in ascii format
-            bcd_out_dir = os.path.dirname(output_file_path)
-            bcd_fname = os.path.basename(output_file_path).replace('hist_kymo', 'bcd_info').replace('.eps', '.txt')
-            with open(os.path.join(bcd_out_dir, bcd_fname), "w") as bcd_file:
-                bcd_file.write(f'<All molecules>\n')
-                for bcd_id in range(len(self.barcode_pos_peak)):
-                    bcd_file.write(f'Barcode {bcd_id}:\n')
-                    bcd_file.write(f' position {self.barcode_pos_peak[bcd_id]}\n')
-                    bcd_file.write(f' width {self.barcode_width_peak[bcd_id]}\n')
-                    bcd_file.write(f' weight {self.barcode_weight_peak[bcd_id]}\n')
-                for tmp_mid in range(self.N_trace):
-                    bcd_file.write(f'\n<Molecules {tmp_mid}>\n')
-                    if self.barcode_pos_peak_idv[tmp_mid]:
-                        for bcd_id in range(len(self.barcode_pos_peak_idv[tmp_mid])):
-                            bcd_file.write(f'Barcode {bcd_id}:\n')
-                            bcd_file.write(f' position {self.barcode_pos_peak_idv[tmp_mid][bcd_id]}\n')
-                            bcd_file.write(f' width {self.barcode_width_peak_idv[tmp_mid][bcd_id]}\n')
-                            bcd_file.write(f' weight {self.barcode_weight_peak_idv[tmp_mid][bcd_id]}\n')
-                    else:
-                        bcd_file.write('No barcode found\n')
+        # --- save barcode positions in ascii format
+        bcd_out_dir = os.path.dirname(output_file_path)
+        bcd_fname = os.path.basename(output_file_path).replace('hist_kymo', 'bcd_info').replace('.eps', '.txt')
+        with open(os.path.join(bcd_out_dir, bcd_fname), "w") as bcd_file:
+            bcd_file.write(f'<All molecules>\n')
+            tmp_bcd = self.bcd_peak_all
+            for bcd_id in range(len(tmp_bcd.pos)):
+                bcd_file.write(f'Barcode {bcd_id}:\n')
+                bcd_file.write(f' position {tmp_bcd.pos[bcd_id]}\n')
+                bcd_file.write(f' std {tmp_bcd.std[bcd_id]}\n')
+                bcd_file.write(f' sem {tmp_bcd.sem[bcd_id]}\n')
+                bcd_file.write(f' weight {tmp_bcd.weight[bcd_id]}\n')
+                bcd_file.write(f' weight (normalized) {tmp_bcd.weight_fraction[bcd_id]}\n')
 
-    def fig_ehist(self, event, x_data, ax, method='curv_fit', automode='manual', mid=-1, output_file_path=[], fhd_kymograph_peak=[]):
+            for tmp_mid in range(self.N_trace):
+                bcd_file.write(f'\n<Molecules {tmp_mid}>\n')
+                tmp_bcd = self.bcd_peak_idv[tmp_mid]
+                if tmp_bcd.pos:
+                    for bcd_id in range(len(tmp_bcd.pos)):
+                        bcd_file.write(f'Barcode {bcd_id}:\n')
+                        bcd_file.write(f' position {tmp_bcd.pos[bcd_id]}\n')
+                        bcd_file.write(f' std {tmp_bcd.std[bcd_id]}\n')
+                        bcd_file.write(f' sem {tmp_bcd.sem[bcd_id]}\n')
+                        bcd_file.write(f' weight {tmp_bcd.weight[bcd_id]}\n')
+                        bcd_file.write(f' weight (normalized) {tmp_bcd.weight_fraction[bcd_id]}\n')
+                        # bcd_file.write(f'Barcode {bcd_id}:\n')
+                        # bcd_file.write(f' position {self.barcode_pos_peak_idv[tmp_mid][bcd_id]}\n')
+                        # bcd_file.write(f' width {self.barcode_width_peak_idv[tmp_mid][bcd_id]}\n')
+                        # bcd_file.write(f' weight {self.barcode_weight_peak_idv[tmp_mid][bcd_id]}\n')
+                else:
+                    bcd_file.write('No barcode found\n')
+
+    def fig_ehist(self, event, ax, method='curv_fit', automode='manual', mid=-1, output_file_path=(),
+                  fhd_kymograph_peak=()):
         self.update_log(f"\r   Cleaning up the figure ({method})... ")
         self.set_progressbar(5)
 
-        # remove previous fit curves
-        self.update_histogram(ax[1], mid)
+        # draw histograms
+        self.update_histogram(ax[1], mid, datatype='datapt')
+        self.update_histogram(ax[2], mid, datatype='peak')
 
-        # start curve fit
-        def fit_gauss(x_data, y_data, fc_x, inits_pos):
-            def fn_gauss_multi(x, *p):  # a, xc, w = p
-                _n_peaks = int(len(p) / 3)
-                y = 0.0
-                for pid in range(_n_peaks):
-                    y += np.exp(-(x - p[pid * 3 + 1]) ** 2 / p[pid * 3 + 2] ** 2 / 2) * p[pid * 3] / p[pid * 3 + 2] / np.sqrt(2 * np.pi)
-                return y
-            n_peaks = len(inits_pos)
-            para_init = []
-            para_bounds = []
-            for pki in range(n_peaks):
-                para_init += [max(y_data)*(x_data[1]-x_data[0]), inits_pos[pki], 0.02]
-                para_bounds += [np.Inf, 1.1, 0.05]
-            # _fc_init = fn_gauss_multi(fc_x, *para_init)
-            para_bounds = ([0.0, 0.0, 0.0] * n_peaks, para_bounds)
-            coeff, var_matrix = optimize.curve_fit(fn_gauss_multi, x_data, y_data, p0=para_init, bounds=para_bounds, maxfev=1000)
-            _fc = fn_gauss_multi(fc_x, *coeff)
-            _barcodes_pos = []
-            _barcodes_weight = []
-            _barcodes_width = []
-            for pki in range(n_peaks):
-                _barcodes_weight.append(coeff[pki * 3 + 0])
-                _barcodes_pos.append(coeff[pki * 3 + 1])
-                _barcodes_width.append(coeff[pki * 3 + 2])
-
-            norm_factor = np.sum(_barcodes_weight)
-            _barcodes_weight = [elmt/norm_factor for elmt in _barcodes_weight]
-
-            return _fc, _barcodes_pos, _barcodes_weight, _barcodes_width
-
-        if automode == 'auto':
-            self.update_log(f"\r   Auto-detection started ({method})... ")
-            self.set_progressbar(10)
-            if mid == -1:
-                coords = self.barcode_pos_peak
-            else:
-                coords = self.barcode_pos_peak_idv[mid]
-        else:  # get peak position from the user
+        if automode == 'manual':
+            # get peak position from the user
             self.update_log(f"\r   waiting for user input ({method})... ")
             self.set_progressbar(10)
 
+            plt.sca(ax[2])
             coords = plt.ginput(99, timeout=0)
             coords = [coord[0] for coord in coords]
 
-        fc_x_vct = np.arange(x_data[0], x_data[-1], (x_data[1] - x_data[0]) / 10)
-        if mid == -1:
-            y_data = self.peak_hist
-        else:
-            y_data = self.peak_hist_idv[mid]
-        barcode_found = True
-        try:
-            fc, barcodes_pos, barcodes_weight, barcodes_width = fit_gauss(x_data=x_data, y_data=y_data, fc_x=fc_x_vct, inits_pos=coords)
-        except:
-            print('no barcode found')
-            barcode_found = False
-            barcodes_pos = []
-            barcodes_weight = []
-            barcodes_width = []
-            fc = []
-
-        self.update_log(f"\r   Updating data ({method})... ")
-        self.set_progressbar(50)
-
-        # update rene data
-        if mid == -1:
-            self.barcode_pos_peak = barcodes_pos
-            self.barcode_width_peak = barcodes_width
-            self.barcode_weight_peak = barcodes_weight
-        else:
-            self.barcode_pos_peak_idv[mid] = barcodes_pos
-            self.barcode_width_peak_idv[mid] = barcodes_width
-            self.barcode_weight_peak_idv[mid] = barcodes_weight
+            self.find_barcode_idv(mid, datatype='datapt', init_pts=coords)
+            self.find_barcode_idv(mid, datatype='peak', init_pts=coords)
 
         # update figures
         self.update_log(f"\r   Updating figures ({method})... ")
         self.set_progressbar(70)
 
         if automode == 'manual':
-            self.update_histogram(ax[1], mid)
+            self.update_histogram(ax[1], mid, datatype='datapt')
+            self.update_histogram(ax[2], mid, datatype='peak')
 
-        if barcode_found:
-            # --- draw fit curv
-            plt.sca(ax[1])
-            plt.plot(fc_x_vct, fc, 'r')
-            plt.ylim(0, max(fc)*1.3)
-            for bcd_id in range(len(barcodes_pos)):
-                tmp_y_pointer = (np.abs(fc_x_vct - barcodes_pos[bcd_id])).argmin()
-                plt.text(barcodes_pos[bcd_id]-0.1, fc[tmp_y_pointer] * 1.1,
-                         f'{barcodes_pos[bcd_id]:.3f}$\pm${barcodes_width[bcd_id]:.3f}', fontsize=7)
-            # --- draw barcode
-            self.update_barcodes(ax[2], mid)
+        # get barcode data
+        if mid == -1:
+            tmp_bcd_datapt = self.bcd_datapt_all
+            tmp_bcd_peak = self.bcd_peak_all
         else:
-            ax[2].cla()
+            tmp_bcd_datapt = self.bcd_datapt_idv[mid]
+            tmp_bcd_peak = self.bcd_peak_idv[mid]
+
+        # --- draw fit curv
+        if tmp_bcd_datapt.pos:
+            plt.sca(ax[1])
+            plt.plot(tmp_bcd_datapt.fc[0], tmp_bcd_datapt.fc[1], 'r')
+            plt.ylim(0, max(tmp_bcd_datapt.fc[1]) * 1.3)
+            for bcd_id in range(len(tmp_bcd_datapt.pos)):
+                tmp_y_pointer = (np.abs(tmp_bcd_datapt.fc[0] - tmp_bcd_datapt.pos[bcd_id])).argmin()
+                plt.text(tmp_bcd_datapt.pos[bcd_id] - 0.1, tmp_bcd_datapt.fc[1][tmp_y_pointer] * 1.1,
+                         f'{tmp_bcd_datapt.pos[bcd_id]:.3f}$\pm${tmp_bcd_datapt.sem[bcd_id]:.3f}', fontsize=7)
+
+        if tmp_bcd_peak.pos:
+            plt.sca(ax[2])
+            plt.plot(tmp_bcd_peak.fc[0], tmp_bcd_peak.fc[1], 'r')
+            plt.ylim(0, max(tmp_bcd_peak.fc[1]) * 1.3)
+            for bcd_id in range(len(tmp_bcd_peak.pos)):
+                tmp_y_pointer = (np.abs(tmp_bcd_peak.fc[0] - tmp_bcd_peak.pos[bcd_id])).argmin()
+                plt.text(tmp_bcd_peak.pos[bcd_id] - 0.1, tmp_bcd_peak.fc[1][tmp_y_pointer] * 1.1,
+                         f'{tmp_bcd_peak.pos[bcd_id]:.3f}$\pm${tmp_bcd_peak.sem[bcd_id]:.3f}', fontsize=7)
+
+            # --- draw barcode
+            self.update_barcodes(ax[3], mid, tmp_bcd_datapt.weight)
+        else:
+            ax[3].cla()
 
         self.update_log(f"\r   Saving figures ({method})... ")
         self.set_progressbar(85)
 
-        print(output_file_path)
+        # print(output_file_path)
         if output_file_path:
             self.save_barcode_info(output_file_path)
             if mid == -1:
                 self.save_kymograph_fig(output_file_path, fhd_kymograph_peak, mid)
-
 
         self.update_log(f"\r   Job done! ({method})... ")
         self.set_progressbar(100)
@@ -406,15 +407,15 @@ class RenePlotSimple(Rene):
             self.fhd_kymograph_peak_idv, self.btn_fit_idv = self.show_hist_kymo(fignum, rene_id, mid, output_file_path)
 
             # --- draw time trace
-            t_vct = [i * self.time_res for i in range(self.trace_len)]
+            t_vct = [i * self.uip['time_res'] for i in range(self.trace_len)]
             plt.sca(ax[0])
             plt.cla()
             plt.plot(t_vct, self.It[mid], color=[.8, .8, .8])
             for pki in range(len(self.I_in_peak_sel[mid])):
-                tmp_t_vct = [(self.trans_d2u_sel[mid][pki] + i + 1) * self.time_res for i in
-                             range(len(self.I_in_peak_sel[mid][pki]))]
+                tmp_t_vct = [(self.trans_d2u_sel[mid][pki] + i + 1) * self.uip['time_res']
+                             for i in range(len(self.I_in_peak_sel[mid][pki]))]
                 plt.plot(tmp_t_vct, self.I_in_peak_sel[mid][pki], 'k')
-            plt.xlim(0, self.trace_len * self.time_res)
+            plt.xlim(0, self.trace_len * self.uip['time_res'])
             plt.ylim(self.Int_min, self.Int_max)
             plt.ylabel('Intensity (a.u.)')
             plt.title(f'mid={mid}')
@@ -425,7 +426,7 @@ class RenePlotSimple(Rene):
             plt.plot(t_vct, self.Id[mid], color=[.6, 1, .6])
             plt.plot(t_vct, self.Ia[mid], color=[1, .6, .6])
             for pki in range(len(self.I_in_peak_sel[mid])):
-                tmp_t_vct = [(self.trans_d2u_sel[mid][pki] + i + 1) * self.time_res for i in
+                tmp_t_vct = [(self.trans_d2u_sel[mid][pki] + i + 1) * self.uip['time_res'] for i in
                              range(len(self.I_in_peak_sel[mid][pki]))]
                 tmp_d_vct = self.Id[mid][self.trans_d2u_sel[mid][pki] + 1:(
                         self.trans_d2u_sel[mid][pki] + 1 + len(self.I_in_peak_sel[mid][pki]))]
@@ -433,7 +434,7 @@ class RenePlotSimple(Rene):
                         self.trans_d2u_sel[mid][pki] + 1 + len(self.I_in_peak_sel[mid][pki]))]
                 plt.plot(tmp_t_vct, tmp_d_vct, color=[0, .5, 0])
                 plt.plot(tmp_t_vct, tmp_a_vct, color=[.5, 0, 0])
-            plt.xlim(0, self.trace_len * self.time_res)
+            plt.xlim(0, self.trace_len * self.uip['time_res'])
             plt.ylim(self.Int_min, self.Int_max)
             plt.ylabel('Intensity (a.u.)')
             plt.tick_params(axis='x', bottom=True, top=True, labeltop=False, labelbottom=False)
@@ -441,15 +442,15 @@ class RenePlotSimple(Rene):
             plt.sca(ax[2])
             plt.cla()
             for pki in range(len(self.E_in_peak[mid])):
-                tmp_t_vct = [(self.trans_d2u[mid][pki] + i + 1) * self.time_res for i in
+                tmp_t_vct = [(self.trans_d2u[mid][pki] + i + 1) * self.uip['time_res'] for i in
                              range(len(self.E_in_peak[mid][pki]))]
                 plt.plot(tmp_t_vct, self.E_in_peak[mid][pki], color=[0.8, 0.8, 1])
             for pki in range(len(self.E_in_peak_sel[mid])):
-                tmp_t_vct = [(self.trans_d2u_sel[mid][pki] + i + 1) * self.time_res for i in
+                tmp_t_vct = [(self.trans_d2u_sel[mid][pki] + i + 1) * self.uip['time_res'] for i in
                              range(len(self.E_in_peak_sel[mid][pki]))]
                 plt.plot(tmp_t_vct, self.E_in_peak_sel[mid][pki], color=[0, 0, .5])
             plt.ylim(-0.1, 1.1)
-            plt.xlim(0, self.trace_len * self.time_res)
+            plt.xlim(0, self.trace_len * self.uip['time_res'])
             plt.ylabel('FRET')
             plt.xlabel('Time (s)')
             plt.tick_params(axis='x', bottom=True, top=True, labeltop=False, labelbottom=True)
@@ -585,12 +586,12 @@ class RenePlotSimple(Rene):
                 os.makedirs(output_dir)
 
             # --- save trace
-            t_vct = [i * self.time_res for i in range(self.trace_len)]
+            t_vct = [i * self.uip['time_res'] for i in range(self.trace_len)]
             output_array = [[i, j, k] for i, j, k in zip(t_vct, self.Ia[mid], self.Id[mid])]
             np.savetxt(os.path.join(output_dir, f'tr{mid}_trace.dat'), output_array)
 
             # --- save dwell time info
-            tmp_dw_t = [len(elmts) * self.time_res for elmts in self.I_in_peak_sel[mid]]
+            tmp_dw_t = [len(elmts) * self.uip['time_res'] for elmts in self.I_in_peak_sel[mid]]
             outout_array = [[i, j, k] for i, j, k in zip(self.trans_d2u_sel[mid], tmp_dw_t, self.E_per_peak_sel[mid])]
             np.savetxt(os.path.join(output_dir, f'tr{mid}_dw.dat'), outout_array)
 
@@ -629,201 +630,107 @@ class RenePlotSimple(Rene):
         show_frames()
 
 
-class RenePlotTS(RenePlotSimple):
-    def show_hist_kymo_ts(self, ax):
-        color_code_dark, color_code_bright = gen_color_code(nx=self.N_trace, ny=int(self.trace_len / 3))
-        plt.sca(ax)
-        # --- draw individual binding traces
-        e_datas = self.E_in_peak_sel
-        t_datas = self.trans_d2u_sel
-        for tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes in zip(e_datas, t_datas, color_code_bright):
-            for tmp_etrain, tmp_t_start, c_code in zip(tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes):
-                tmp_fr_vct = [(tmp_t_start + elmt) * self.time_res for elmt in range(len(tmp_etrain))]
-                plt.plot(tmp_etrain, tmp_fr_vct, color=c_code, linewidth=0.5)
-        # --- draw average FRET values
-        for tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes in zip(self.E_per_peak_sel, self.trans_d2u_sel,
-                                                                       color_code_dark):
-            for tmp_e_value, tmp_t_start, c_code in zip(tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes):
-                plt.plot(tmp_e_value, tmp_t_start * self.time_res, '.', color=c_code, markersize=2)
-        plt.ylabel('Time (s)')
-
-    def show_ehist_ts(self, ax):
-        # start curve fit
-        n_peaks = 2
-        barcodes_pos = []
-        barcodes_weight = []
-        barcodes_width = []
-
-        x_data = np.add(self.e_bin[0:-1], (self.e_bin[2] - self.e_bin[1]) / 2)
-        fc_x_vct = np.arange(x_data[0], x_data[-1], (x_data[1] - x_data[0]) / 10)
-        tmp_y = self.peak_hist
-
-        def fn_gauss2(x, *p):  # a, xc, w = p
-            _n_peaks = int(len(p) / 3)
-            y = 0.0
-            for pid in range(_n_peaks):
-                y += np.exp(-(x - p[pid * 3 + 1]) ** 2 / p[pid * 3 + 2] ** 2 / 2) * p[pid * 3] / p[
-                    pid * 3 + 2] / np.sqrt(2 * np.pi)
-            return y
-
-        para_init = []
-        para_bounds = []
-        coords = self.barcode_pos_peak
-        for pki in range(n_peaks):
-            para_init += [25.0, coords[pki], 0.05]
-            para_bounds += [np.Inf, 1.1, 0.05]
-        para_bounds = ([0.0, 0.0, 0.0] * n_peaks, para_bounds)
-        coeff, var_matrix = optimize.curve_fit(fn_gauss2, x_data, tmp_y, p0=para_init, bounds=para_bounds)
-        fc = fn_gauss2(fc_x_vct, *coeff)
-
-        for pki in range(n_peaks):
-            barcodes_weight.append(coeff[pki * 3 + 0])
-            barcodes_pos.append(coeff[pki * 3 + 1])
-            barcodes_width.append(coeff[pki * 3 + 2])
-
-        # update user data
-        self.barcode_pos_peak = barcodes_pos
-
-        # updata figures
-        self.update_histogram(ax)
-        plt.sca(ax)
-        plt.plot(fc_x_vct, fc, 'r')
-
-
-class RenePlotKimohist(Rene):
-    def show_hist_kymo(self, fig_hdl, trace_id=0, n_traces=3, mid=-1, draw_as_peak=True):
-        if draw_as_peak:
-            if mid == -1:  # plot all the molecules
-                c_hist_kymo = self.peak_hist_kymo
-                hist_a = self.peak_hist
-                hist_centers = self.barcode_pos_peak
-            else:  # plot specific molecule
-                c_hist_kymo = self.peak_hist_kymo_idv[mid, :, :]
-                hist_a = self.peak_hist_idv[mid, :]
-                hist_centers = self.barcode_pos_peak_idv[mid]
-        else:
-            if mid == -1:  # plot all the molecules
-                c_hist_kymo = self.hist_kymo
-                hist_a = self.hist
-                hist_centers = self.barcode_pos_datapt
-            else:  # plot specific molecule
-                c_hist_kymo = self.hist_kymo_idv[mid, :, :]
-                hist_a = self.hist_idv[mid, :]
-                hist_centers = self.barcode_pos_datapt_idv[mid]
-
-        self.draw_kymo(fig_hdl, trace_id, n_traces, c_hist_kymo, hist_a, hist_centers, mid)
-
-    def draw_kymo(self, fighdl, trace_id, n_traces, c_hist_kymo, hist_a, hist_centers, mid):
-        n_line_kimo, n_e_bin = np.shape(self.hist_kymo)
-        t_grid, e_grid = np.mgrid[0:n_line_kimo, self.e_bin[0]:self.e_bin[-1]:(self.e_bin[1] - self.e_bin[0])]
-        t_grid *= self.time_res * self.t_bin_size
-
-        # draw hist kymograph
-        fighdl.ax[trace_id].pcolor(e_grid, t_grid, c_hist_kymo, cmap='gray',
-                                   vmin=c_hist_kymo.min(),
-                                   vmax=c_hist_kymo.max() / 2)
-        dummy_y = [0, t_grid[-1][0]]
-        # draw barcode on the kymo
-        for c_cen in hist_centers:
-            dummy_x = [c_cen, c_cen]
-            fighdl.ax[trace_id].plot(dummy_x, dummy_y, color=(1, .8, 0), lw=3)
-        if mid != -1:
-            # draw detected barcode with diff. color
-            for bid in self.barcodes_detected_ind[mid]:
-                dummy_x = [self.barcode_pos_peak[bid], self.barcode_pos_peak[bid]]
-                fighdl.ax[trace_id].plot(dummy_x, dummy_y, color=(1, 0, 0), lw=3)
-
-        fighdl.ax[trace_id].set_ylabel('Time (s)')
-        fighdl.ax[trace_id].set_ylim(t_grid[-1][0], 0)
-        if trace_id == 0:
-            fighdl.ax[trace_id].set_title(f'mol #{mid}')
-            fighdl.ax[trace_id].tick_params(
-                axis='x',  # changes apply to the x-axis
-                which='both',  # both major and minor ticks are affected
-                bottom=False,  # ticks along the bottom edge are off
-                top=True,  # ticks along the top edge are off
-                labeltop=True,
-                labelbottom=False)  # labels along the bottom edge are off
-        else:
-            fighdl.ax[trace_id].tick_params(
-                axis='x',  # changes apply to the x-axis
-                which='both',  # both major and minor ticks are affected
-                bottom=True,  # ticks along the bottom edge are off
-                top=True,  # ticks along the top edge are off
-                labeltop=False,
-                labelbottom=False)  # labels along the bottom edge are off
-
-        # draw barcode
-        for c_cen in hist_centers:
-            dummy_x = [c_cen, c_cen]
-            fighdl.ax[n_traces].plot(dummy_x, [0, 1], color=(0, 0, 0), lw=5)
-        fighdl.ax[n_traces].set_xlim((e_grid[0][0], e_grid[-1][-1]))
-        fighdl.ax[n_traces].tick_params(
-            axis='x',  # changes apply to the x-axis
-            which='both',  # both major and minor ticks are affected
-            bottom=True,  # ticks along the bottom edge are off
-            top=True,  # ticks along the top edge are off
-            labeltop=False,
-            labelbottom=False)  # labels along the bottom edge are off
-        fighdl.ax[n_traces].tick_params(
-            axis='y',  # changes apply to the x-axis
-            which='both',  # both major and minor ticks are affected
-            left=False,  # ticks along the bottom edge are off
-            right=False,  # ticks along the top edge are off
-            labelleft=False,
-            labelright=False)  # labels along the bottom edge are off
-
-        # draw histograms
-        fighdl.ax[n_traces + 1].bar(e_grid[1, :], hist_a, self.e_bin[1] - self.e_bin[0])
-        fighdl.ax[n_traces + 1].set_xlim((e_grid[0, 0], e_grid[0, -1]))
-        fighdl.ax[n_traces + 1].set_xlabel('FRET')
-
-    def show_trace(self, fighdl, trace_id=0, n_rene=1, mid=0):
-        # plot intensity traces
-        ax = fighdl.ax[0][trace_id]
-        ax.plot(self.It[mid], color=(.7, .7, .7))
-        ax.plot(self.It_ideal[mid], 'k')
-        ax.plot(self.Id[mid], 'g-')
-        ax.plot(self.Ia[mid], 'r-')
-        ax.grid(True)
-        ax.set_ylim((-100, 1000))
-        ax.set_xlim((0, self.trace_len))
-
-        if trace_id == 0:
-            ax.set_ylabel('Fluorescence (a.u.)')
-            ax.set_title(f'mol #{mid}')
-        else:
-            ax.tick_params(
-                axis='y',  # changes apply to the x-axis
-                which='both',  # both major and minor ticks are affected
-                left=True,  # ticks along the bottom edge are off
-                right=True,  # ticks along the top edge are off
-                labelleft=False,
-                labelright=False)  # labels along the bottom edge are off
-
-        # plot FRET trace
-        ax = fighdl.ax[1][trace_id]
-        ax.plot(self.E[mid], color=(.9, .9, 1))
-        # ax.plot(self.E_clean[mid], 'b-')
-
-        tmp_e_trains = self.E_in_peak[trace_id]
-        tmp_n_peak = len(tmp_e_trains)
-        for pid in range(tmp_n_peak):
-            tmp_e_train = tmp_e_trains[pid]
-            tmp_t_vct = [self.trans_d2u[trace_id][pid] + elmt for elmt in range(len(tmp_e_train))]
-            ax.plot(tmp_t_vct, tmp_e_train)
-
-        ax.grid(True)
-        ax.set_ylim((-0.1, 1.1))
-        ax.set_xlim((0, self.trace_len))
-
-        if trace_id == 0:
-            ax.set_ylabel('FRET')
-        else:
-            ax.tick_params(
-                axis='y',  # changes apply to the x-axis
-                which='both',  # both major and minor ticks are affected
-                left=True,  # ticks along the bottom edge are off
-                right=True,  # ticks along the top edge are off
-                labelleft=False,
-                labelright=False)  # labels along the bottom edge are off
+# class RenePlotTS(RenePlotSimple):
+#     def show_hist_kymo_ts(self, ax, mid=-1):
+#         t_datas = self.trans_d2u_sel
+#         e_datas_raw = self.E_in_peak_sel
+#         e_datas_avr = self.E_per_peak_sel
+#
+#         if mid != -1:
+#             t_datas = [t_datas[mid]]
+#             e_datas_raw = [e_datas_raw[mid]]
+#             e_datas_avr = [e_datas_avr[mid]]
+#
+#         color_code_dark, color_code_bright = gen_color_code(nx=self.N_trace, ny=int(self.trace_len / 3))
+#         plt.sca(ax)
+#         # --- draw individual binding traces
+#         for tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes in zip(e_datas_raw, t_datas, color_code_bright):
+#             for tmp_etrain, tmp_t_start, c_code in zip(tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes):
+#                 tmp_fr_vct = [(tmp_t_start + elmt) * self.time_res for elmt in range(len(tmp_etrain))]
+#                 plt.plot(tmp_etrain, tmp_fr_vct, color=c_code, linewidth=0.5)
+#         # --- draw average FRET values
+#         for tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes in zip(e_datas_avr, t_datas, color_code_dark):
+#             for tmp_e_value, tmp_t_start, c_code in zip(tmp_E_in_peak_per_mol, tmp_t_start_per_mol, c_codes):
+#                 plt.plot(tmp_e_value, tmp_t_start * self.time_res, '.', color=c_code, markersize=2)
+#
+#     def show_ehist_ts(self, ax, mid=-1, special_flg=False):
+#         # parameter init
+#         # run_gmm(data_train, n_cluster=2, min_occupancy=0.1, min_distance=0.1)
+#         # coords = self.barcode_pos_peak
+#
+#         # curve fit
+#         x_data = np.add(self.e_bin[0:-1], (self.e_bin[2] - self.e_bin[1]) / 2)
+#         fc_x_vct = np.arange(x_data[0], x_data[-1], (x_data[1] - x_data[0]) / 10)
+#
+#         if mid == -1:
+#             y_data = self.peak_hist
+#             if special_flg == True:
+#                 init_centers = [0.09, 0.3]
+#             else:
+#                 init_centers = self.barcode_pos_peak
+#             fc, barcodes_pos, barcodes_weight, barcodes_width = fit_gauss(x_data=x_data, y_data=y_data,
+#                                                                           fc_x=fc_x_vct, inits_pos=init_centers)
+#             # update rene data
+#             self.barcode_pos_peak = barcodes_pos
+#         else:
+#             # following code does not work
+#             # y_data = self.peak_hist_idv[mid]
+#             # curv_para = []
+#             # if hasattr(self.barcode_pos_peak_idv[mid],"__len__"):
+#             #     for a, xc, w in zip(self.barcode_weight_peak_idv[mid], self.barcode_pos_peak_idv[mid], self.barcode_width_peak_idv[mid]):
+#             #         curv_para.append(a)
+#             #         curv_para.append(xc)
+#             #         curv_para.append(w)
+#             # else:
+#             #     curv_para = [self.barcode_weight_peak_idv[mid], self.barcode_pos_peak_idv[mid], self.barcode_width_peak_idv[mid]]
+#             #
+#             # fc = fn_gauss_multi(fc_x_vct, *curv_para)  # a, xc, w = p
+#             pass
+#
+#         # updata figures
+#         self.update_histogram(ax, mid)
+#         if mid == -1:
+#             plt.sca(ax)
+#             plt.plot(fc_x_vct, fc, 'r')
+#
+#     def show_ehist_ts_old(self, ax, mid=-1):
+#         # start curve fit
+#         n_peaks = 2
+#         barcodes_pos = []
+#         barcodes_weight = []
+#         barcodes_width = []
+#
+#         x_data = np.add(self.e_bin[0:-1], (self.e_bin[2] - self.e_bin[1]) / 2)
+#         fc_x_vct = np.arange(x_data[0], x_data[-1], (x_data[1] - x_data[0]) / 10)
+#         tmp_y = self.peak_hist
+#
+#         def fn_gauss2(x, *p):  # a, xc, w = p
+#             _n_peaks = int(len(p) / 3)
+#             y = 0.0
+#             for pid in range(_n_peaks):
+#                 y += np.exp(-(x - p[pid * 3 + 1]) ** 2 / p[pid * 3 + 2] ** 2 / 2) * p[pid * 3] / p[
+#                     pid * 3 + 2] / np.sqrt(2 * np.pi)
+#             return y
+#
+#         para_init = []
+#         para_bounds = []
+#         coords = self.barcode_pos_peak
+#         for pki in range(n_peaks):
+#             para_init += [25.0, coords[pki], 0.05]
+#             para_bounds += [np.Inf, 1.1, 0.05]
+#         para_bounds = ([0.0, 0.0, 0.0] * n_peaks, para_bounds)
+#         coeff, var_matrix = optimize.curve_fit(fn_gauss2, x_data, tmp_y, p0=para_init, bounds=para_bounds)
+#         fc = fn_gauss2(fc_x_vct, *coeff)
+#
+#         for pki in range(n_peaks):
+#             barcodes_weight.append(coeff[pki * 3 + 0])
+#             barcodes_pos.append(coeff[pki * 3 + 1])
+#             barcodes_width.append(coeff[pki * 3 + 2])
+#
+#         # update user data
+#         self.barcode_pos_peak = barcodes_pos
+#
+#         # updata figures
+#         self.update_histogram(ax)
+#         plt.sca(ax)
+#         plt.plot(fc_x_vct, fc, 'r')
