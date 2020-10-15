@@ -1,3 +1,8 @@
+from sys import platform
+# if platform == "darwin":
+#     from matplotlib import use
+#     use('WXAgg')
+
 import pickle
 from tkinter import *
 from tkinter import ttk, filedialog
@@ -20,7 +25,7 @@ class ReneMain(Tk):
         self.prepare_gui(uip)
         self.renes = []
 
-    def user_parameters(self, mode='init'):
+    def user_parameters(self, mode='init', uip=()):
         if mode == 'init':
             uip = {
                 "time_res": 0.1,
@@ -28,8 +33,8 @@ class ReneMain(Tk):
                 "leakage": 0.0,
                 "bg_d_fix": 0,
                 "bg_a_fix": 0,
-                "Int_max": 1000,
-                "Int_min": -100,
+                "Int_max": 2000,
+                "Int_min": -200,
                 "toi_start": 0,
                 "toi_end": float('Inf'),
 
@@ -46,7 +51,7 @@ class ReneMain(Tk):
 
                 "bcd_max_n_peaks": 3,
                 "bcd_min_occupancy": 0.1,
-                "bcd_min_distance": 0.05
+                "bcd_min_distance": 0.1
             }
         elif mode == 'fetch':
             uip = {
@@ -75,12 +80,23 @@ class ReneMain(Tk):
                 "bcd_min_occupancy": float(self.etr_bcd_min_occupancy.get()),
                 "bcd_min_distance": float(self.etr_bcd_min_distance.get())
             }
+        elif mode == 'set':
+            if uip:
+                # update uip
+                self.update_gui(uip)
+                # update GUI fields
         return uip
+
+    def update_gui(self, uip):
+        self.etr_min_peak_int.delete(0, END)
+        self.etr_min_peak_int.insert(0, str(uip['min_peak_int']))
+
+        self.etr_max_peak_int.delete(0, END)
+        self.etr_max_peak_int.insert(0, str(uip['max_peak_int']))
 
     def prepare_gui(self, uip):
         # --- header ---#
-        self.lbl_header = Label(self, text="René Magritte v2.0", width=50, pady=10, font='Helvetica 12 bold').grid(
-            row=0, column=0, columnspan=10)
+        self.lbl_header = Label(self, text="René Magritte v2.2", width=50, pady=10, font='Helvetica 12 bold').grid(row=0, column=0, columnspan=10)
 
         # --- column 0, 1 --- #
         self.lbl_time_res = Label(self, text="Time res. (s)", width=10).grid(row=1, column=0)
@@ -163,7 +179,7 @@ class ReneMain(Tk):
         self.etr_e_bin_size = Entry(self, textvariable=DoubleVar(self, value=uip["e_bin_size"]), width=7)
         self.etr_e_bin_size.grid(row=8, column=3)
 
-        self.lbl_bcd_max_n_peaks = Label(self, text="max_n_peaks", width=10).grid(row=10, column=2)
+        self.lbl_bcd_max_n_peaks = Label(self, text="# Barcodes", width=10).grid(row=10, column=2)
         self.etr_bcd_max_n_peaks = Entry(self, textvariable=DoubleVar(self, value=uip["bcd_max_n_peaks"]), width=7)
         self.etr_bcd_max_n_peaks.grid(row=10, column=3)
 
@@ -178,7 +194,7 @@ class ReneMain(Tk):
         # --- colum 4, Buttons --- #
         self.btn_get_trace = Button(self, text="get traces", width=10, command=lambda: self.get_trace(uip)).grid(row=1,
                                                                                                                  column=6)
-        self.btn_analyse = Button(self, text="re-analyze", width=10, command=self.re_analyze).grid(row=3, column=6)
+        self.btn_analyse = Button(self, text="re-analyze", width=10, command=self.re_analyze, state=DISABLED).grid(row=3, column=6)
         self.btn_show_ehist = Button(self, text="show hist", width=10, command=self.show_ehist).grid(row=5, column=6)
         self.btn_show_dwell = Button(self, text="show dwell", width=10, command=self.show_dwell).grid(row=6, column=6)
         self.btn_show_trace = Button(self, text="show trace", width=10, command=self.show_trace).grid(row=7, column=6)
@@ -228,9 +244,10 @@ class ReneMain(Tk):
 
         self.set_progressbar(20)
         self.renes = []
-        self.renes.append(RenePlotSimple(c_pth, uip, self.progress_bar, self.log_text))
+        # with Rene main, only one rene is allowed to be loaded
+        self.renes.append(RenePlotSimple(c_pth, uip, self.progress_bar, self.log_text, gui_obj=self))
 
-        # self.show_ehist()
+        self.show_ehist()
         # self.show_dwell()
         self.save_result()
 
@@ -239,7 +256,8 @@ class ReneMain(Tk):
         if len(self.renes) == 0:
             messagebox.showinfo(title='Rene', message='Load data first!')
         for rene in self.renes:
-            rene.set_parameters(uip=uip, run_afterwards=True)
+            rene.set_parameters(uip=uip)
+            rene.run_analysis()
         self.show_ehist()
         # self.show_dwell()
 
@@ -250,7 +268,7 @@ class ReneMain(Tk):
 
         uip = self.user_parameters('fetch')
         for rene in self.renes:
-            rene.set_parameters(uip=uip, run_afterwards=False)
+            rene.set_parameters(uip=uip)
 
         n_rene = len(self.renes)
         for rene_id, rene in enumerate(self.renes):
@@ -274,7 +292,7 @@ class ReneMain(Tk):
 
         uip = self.user_parameters('fetch')
         for rene in self.renes:
-            rene.set_parameters(uip=uip, run_afterwards=False)
+            rene.set_parameters(uip=uip)
 
         # --- draw hist-kymo --- #
         self.fhd_hist_kymo = []
@@ -305,7 +323,7 @@ class ReneMain(Tk):
 
         uip = self.user_parameters('fetch')
         for rene in self.renes:
-            rene.set_parameters(uip=uip, run_afterwards=False)
+            rene.set_parameters(uip=uip)
 
         for rene_id, rene in enumerate(self.renes):
             # --- prepare file path for figure saving
@@ -340,19 +358,22 @@ class ReneMain(Tk):
             # remove tkinter handle that belongs to the main GUI
             del rene.pg_bar
             del rene.log_txt
+            del rene.gui_obj
             with open(os.path.join(output_dir, file_name_base + '.rene'), 'wb') as rene_file:
                 pickle.dump(rene, rene_file)
                 rene_file.close()
             # restore tkinter handles
             rene.log_txt = self.log_text
             rene.pg_bar = self.progress_bar
+            rene.gui_obj = self
 
             # --- save dwell data
             tmp_out = []
             for mid in range(rene.N_trace):
                 tmp0 = rene.E_per_peak_sel[mid]
                 tmp1 = rene.I_per_peak_sel[mid]
-                tmp2 = [len(elmts) * rene.time_res for elmts in rene.I_in_peak_sel[mid]]
+                # tmp2 = [len(elmts) * rene.time_res for elmts in rene.I_in_peak_sel[mid]]
+                tmp2 = [len(elmts) * rene.uip['time_res'] for elmts in rene.I_in_peak_sel[mid]]
                 for i, j, k in zip(tmp0, tmp1, tmp2):
                     tmp_out.append([i, j, k])
             np.savetxt(os.path.join(output_dir, file_name_base + '_binding_events_EIT.dat'), tmp_out)
