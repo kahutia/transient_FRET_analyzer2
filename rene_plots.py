@@ -54,7 +54,7 @@ class RenePlotSimple(Rene):
                 bcd_ax.tick_params(axis='x', which='both', bottom=True, top=True, labeltop=False, labelbottom=True)
                 bcd_ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False, labelright=False)
         else:
-            barcode_img_res = 250
+            barcode_img_res = 1000
             barcode_img = np.zeros((barcode_img_res + 1, 1))
             y_vct, x_vct = np.mgrid[0:1.1:1, 0:1 + 2 / barcode_img_res:1 / barcode_img_res]
             barcode_single_line = np.ones(1)
