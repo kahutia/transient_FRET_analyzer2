@@ -54,7 +54,7 @@ class RenePlotSimple(Rene):
                 bcd_ax.tick_params(axis='x', which='both', bottom=True, top=True, labeltop=False, labelbottom=True)
                 bcd_ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=False, labelright=False)
         else:
-            barcode_img_res = 1000
+            barcode_img_res = 250
             barcode_img = np.zeros((barcode_img_res + 1, 1))
             y_vct, x_vct = np.mgrid[0:1.1:1, 0:1 + 2 / barcode_img_res:1 / barcode_img_res]
             barcode_single_line = np.ones(1)
@@ -162,37 +162,39 @@ class RenePlotSimple(Rene):
             fhd.savefig(output_file_path, format='eps')
 
     def save_barcode_info(self, output_file_path):
+        def write_bcd_into_textfile(_bcd_file, _tmp_bcd):
+            if _tmp_bcd.pos:
+                for bcd_id in range(len(_tmp_bcd.pos)):
+                    _bcd_file.write(f'Barcode {bcd_id}:\n')
+                    _bcd_file.write(f' position {_tmp_bcd.pos[bcd_id]}\n')
+                    _bcd_file.write(f' std {_tmp_bcd.std[bcd_id]}\n')
+                    _bcd_file.write(f' sem {_tmp_bcd.sem[bcd_id]}\n')
+                    _bcd_file.write(f' weight {_tmp_bcd.weight[bcd_id]}\n')
+                    _bcd_file.write(f' weight (normalized) {_tmp_bcd.weight_fraction[bcd_id]}\n')
+            else:
+                _bcd_file.write('No barcode found\n')
+
         # --- save barcode positions in ascii format
         bcd_out_dir = os.path.dirname(output_file_path)
-        bcd_fname = os.path.basename(output_file_path).replace('hist_kymo', 'bcd_info').replace('.eps', '.txt')
+        bcd_fname = os.path.basename(output_file_path).replace('hist_kymo', 'bcd_info_by_peak').replace('.eps', '.txt')
+
         with open(os.path.join(bcd_out_dir, bcd_fname), "w") as bcd_file:
             bcd_file.write(f'<All molecules>\n')
-            tmp_bcd = self.bcd_peak_all
-            for bcd_id in range(len(tmp_bcd.pos)):
-                bcd_file.write(f'Barcode {bcd_id}:\n')
-                bcd_file.write(f' position {tmp_bcd.pos[bcd_id]}\n')
-                bcd_file.write(f' std {tmp_bcd.std[bcd_id]}\n')
-                bcd_file.write(f' sem {tmp_bcd.sem[bcd_id]}\n')
-                bcd_file.write(f' weight {tmp_bcd.weight[bcd_id]}\n')
-                bcd_file.write(f' weight (normalized) {tmp_bcd.weight_fraction[bcd_id]}\n')
+            write_bcd_into_textfile(bcd_file, self.bcd_peak_all)
 
             for tmp_mid in range(self.N_trace):
                 bcd_file.write(f'\n<Molecules {tmp_mid}>\n')
-                tmp_bcd = self.bcd_peak_idv[tmp_mid]
-                if tmp_bcd.pos:
-                    for bcd_id in range(len(tmp_bcd.pos)):
-                        bcd_file.write(f'Barcode {bcd_id}:\n')
-                        bcd_file.write(f' position {tmp_bcd.pos[bcd_id]}\n')
-                        bcd_file.write(f' std {tmp_bcd.std[bcd_id]}\n')
-                        bcd_file.write(f' sem {tmp_bcd.sem[bcd_id]}\n')
-                        bcd_file.write(f' weight {tmp_bcd.weight[bcd_id]}\n')
-                        bcd_file.write(f' weight (normalized) {tmp_bcd.weight_fraction[bcd_id]}\n')
-                        # bcd_file.write(f'Barcode {bcd_id}:\n')
-                        # bcd_file.write(f' position {self.barcode_pos_peak_idv[tmp_mid][bcd_id]}\n')
-                        # bcd_file.write(f' width {self.barcode_width_peak_idv[tmp_mid][bcd_id]}\n')
-                        # bcd_file.write(f' weight {self.barcode_weight_peak_idv[tmp_mid][bcd_id]}\n')
-                else:
-                    bcd_file.write('No barcode found\n')
+                write_bcd_into_textfile(bcd_file, self.bcd_peak_idv[tmp_mid])
+
+        bcd_fname = os.path.basename(output_file_path).replace('hist_kymo', 'bcd_info_by_rawdata').replace('.eps', '.txt')
+
+        with open(os.path.join(bcd_out_dir, bcd_fname), "w") as bcd_file:
+            bcd_file.write(f'<All molecules>\n')
+            write_bcd_into_textfile(bcd_file, self.bcd_datapt_all)
+
+            for tmp_mid in range(self.N_trace):
+                bcd_file.write(f'\n<Molecules {tmp_mid}>\n')
+                write_bcd_into_textfile(bcd_file, self.bcd_datapt_idv[tmp_mid])
 
     def fig_ehist(self, event, ax, method='curv_fit', automode='manual', mid=-1, output_file_path=(),
                   fhd_kymograph_peak=()):
@@ -239,7 +241,7 @@ class RenePlotSimple(Rene):
             for bcd_id in range(len(tmp_bcd_datapt.pos)):
                 tmp_y_pointer = (np.abs(tmp_bcd_datapt.fc[0] - tmp_bcd_datapt.pos[bcd_id])).argmin()
                 plt.text(tmp_bcd_datapt.pos[bcd_id] - 0.1, tmp_bcd_datapt.fc[1][tmp_y_pointer] * 1.1,
-                         f'{tmp_bcd_datapt.pos[bcd_id]:.3f}$\pm${tmp_bcd_datapt.sem[bcd_id]:.3f}', fontsize=7)
+                         f'{tmp_bcd_datapt.pos[bcd_id]:.4f}$\pm${tmp_bcd_datapt.sem[bcd_id]:.4f}', fontsize=7)
 
         if tmp_bcd_peak.pos:
             plt.sca(ax[2])
@@ -248,7 +250,7 @@ class RenePlotSimple(Rene):
             for bcd_id in range(len(tmp_bcd_peak.pos)):
                 tmp_y_pointer = (np.abs(tmp_bcd_peak.fc[0] - tmp_bcd_peak.pos[bcd_id])).argmin()
                 plt.text(tmp_bcd_peak.pos[bcd_id] - 0.1, tmp_bcd_peak.fc[1][tmp_y_pointer] * 1.1,
-                         f'{tmp_bcd_peak.pos[bcd_id]:.3f}$\pm${tmp_bcd_peak.sem[bcd_id]:.3f}', fontsize=7)
+                         f'{tmp_bcd_peak.pos[bcd_id]:.4f}$\pm${tmp_bcd_peak.sem[bcd_id]:.4f}', fontsize=7)
 
             # --- draw barcode
             self.update_barcodes(ax[3], mid, tmp_bcd_datapt.weight)
